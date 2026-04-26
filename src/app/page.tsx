@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import JSZip from "jszip";
 import { Difficulty, ExerciseItem, RepMode, WorkoutPlannerState } from "@/lib/types";
 import { loadState, saveState, uid } from "@/lib/workout-storage";
 
@@ -273,7 +274,7 @@ export default function Home() {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    const text = await file.text().catch(() => "");
+    const text = await readUploadText(file);
     const parsed = parseDocumentText(text);
     setImportDocName(file.name);
     setImportDrafts(parsed);
@@ -441,7 +442,7 @@ export default function Home() {
 
               <section className="mb-6 rounded border border-slate-200 p-3">
                 <h3 className="mb-2 font-semibold">Dokumentimport</h3>
-                <input type="file" onChange={handleDocUpload} className="mb-3" />
+                <input type="file" accept=".txt,.docx,.pdf" onChange={handleDocUpload} className="mb-3" />
                 {importDrafts.length > 0 ? (
                   <div className="space-y-2">
                     {importDrafts.map((draft, index) => (
@@ -633,4 +634,76 @@ function parseDocumentText(raw: string): ParsedExerciseDraft[] {
     .filter((entry): entry is ParsedExerciseDraft => Boolean(entry));
 
   return drafts.slice(0, 30);
+}
+
+async function readUploadText(file: File): Promise<string> {
+  const lowerName = file.name.toLowerCase();
+  const isPdf = lowerName.endsWith(".pdf") || file.type === "application/pdf";
+  const isDocx =
+    lowerName.endsWith(".docx") ||
+    file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+  if (isPdf) {
+    return readPdfText(file);
+  }
+
+  if (!isDocx) {
+    return file.text().catch(() => "");
+  }
+
+  try {
+    const buffer = await file.arrayBuffer();
+    const zip = await JSZip.loadAsync(buffer);
+    const documentXml = await zip.file("word/document.xml")?.async("text");
+    if (!documentXml) return "";
+    return extractTextFromWordXml(documentXml);
+  } catch {
+    return "";
+  }
+}
+
+function extractTextFromWordXml(xml: string): string {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xml, "application/xml");
+  const paragraphs = Array.from(doc.getElementsByTagName("w:p"));
+
+  const lines = paragraphs
+    .map((paragraph) => {
+      const textNodes = Array.from(paragraph.getElementsByTagName("w:t"));
+      return textNodes.map((node) => node.textContent ?? "").join("").trim();
+    })
+    .filter(Boolean);
+
+  return lines.join("\n");
+}
+
+async function readPdfText(file: File): Promise<string> {
+  try {
+    const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const buffer = await file.arrayBuffer();
+    const pdf = await getDocument({
+      data: buffer,
+      useWorkerFetch: false,
+      isEvalSupported: false,
+    }).promise;
+
+    const lines: string[] = [];
+
+    for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
+      const page = await pdf.getPage(pageIndex);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item) => ("str" in item ? item.str : ""))
+        .join(" ")
+        .trim();
+
+      if (pageText) {
+        lines.push(pageText);
+      }
+    }
+
+    return lines.join("\n");
+  } catch {
+    return "";
+  }
 }
