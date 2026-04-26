@@ -27,6 +27,9 @@ export default function Home() {
   const [exercisePicture, setExercisePicture] = useState("");
   const [isWorkoutMode, setIsWorkoutMode] = useState(false);
   const [currentExerciseIndex, setCurrentExerciseIndex] = useState(0);
+  const [plannedRounds, setPlannedRounds] = useState(1);
+  const [currentRound, setCurrentRound] = useState(1);
+  const [totalRounds, setTotalRounds] = useState(1);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [ratingDifficulty, setRatingDifficulty] = useState<Difficulty>("medium");
   const [ratingNote, setRatingNote] = useState("");
@@ -191,6 +194,7 @@ export default function Home() {
 
   function startWorkout() {
     if (!selectedWeek || selectedWeek.exercises.length === 0) return;
+    const safeRounds = Math.max(1, plannedRounds || 1);
     const sessionId = uid("session");
     setState((prev) => ({
       ...prev,
@@ -208,6 +212,8 @@ export default function Home() {
     }));
     setActiveSessionId(sessionId);
     setCurrentExerciseIndex(0);
+    setCurrentRound(1);
+    setTotalRounds(safeRounds);
     setIsWorkoutMode(true);
   }
 
@@ -222,6 +228,8 @@ export default function Home() {
       ),
     }));
     setIsWorkoutMode(false);
+    setCurrentRound(1);
+    setTotalRounds(1);
   }, [activeSessionId]);
 
   const nextExercise = useCallback(() => {
@@ -243,11 +251,17 @@ export default function Home() {
     }));
 
     if (currentExerciseIndex >= lastIndex) {
-      finishWorkout();
+      if (currentRound >= totalRounds) {
+        finishWorkout();
+        return;
+      }
+      setCurrentRound((prev) => prev + 1);
+      setCurrentExerciseIndex(0);
       return;
     }
+
     setCurrentExerciseIndex((prev) => prev + 1);
-  }, [activeSessionId, currentExerciseIndex, finishWorkout, selectedWeek]);
+  }, [activeSessionId, currentExerciseIndex, currentRound, finishWorkout, selectedWeek, totalRounds]);
 
   function saveRating() {
     if (!activeSessionId) return;
@@ -397,15 +411,28 @@ export default function Home() {
             <p>Erstelle links zuerst eine Woche.</p>
           ) : (
             <>
-              <header className="mb-4 flex items-center justify-between">
+              <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <h2 className="text-lg font-semibold">{selectedWeek.name}</h2>
-                <button
-                  className="rounded bg-emerald-600 px-3 py-2 text-white disabled:opacity-50"
-                  onClick={startWorkout}
-                  disabled={selectedWeek.exercises.length === 0}
-                >
-                  Workout starten
-                </button>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm text-slate-600" htmlFor="rounds-input">
+                    Runden
+                  </label>
+                  <input
+                    id="rounds-input"
+                    type="number"
+                    min={1}
+                    value={plannedRounds}
+                    onChange={(event) => setPlannedRounds(Math.max(1, Number(event.target.value) || 1))}
+                    className="w-20 rounded border border-slate-300 px-2 py-2"
+                  />
+                  <button
+                    className="rounded bg-emerald-600 px-3 py-2 text-white disabled:opacity-50"
+                    onClick={startWorkout}
+                    disabled={selectedWeek.exercises.length === 0}
+                  >
+                    Workout starten
+                  </button>
+                </div>
               </header>
 
               <form onSubmit={addExercise} className="mb-6 grid gap-2 md:grid-cols-4">
@@ -519,7 +546,12 @@ export default function Home() {
                         </div>
                         <div className="mt-2 flex flex-wrap items-center gap-3">
                           {exercise.picture ? (
-                            <a className="text-sm text-blue-600" href={exercise.picture} target="_blank">
+                            <a
+                              className="text-sm text-blue-600"
+                              href={exercise.picture}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
                               Bild ansehen
                             </a>
                           ) : null}
@@ -553,6 +585,16 @@ export default function Home() {
         >
           <div className="max-w-xl text-center">
             <p className="mb-2 text-sm text-slate-200">Enter / Leertaste / Tap für nächste Übung</p>
+            <p className="mb-3 text-sm text-slate-300">
+              Runde {currentRound} von {totalRounds} - Übung {currentExerciseIndex + 1} von {activeExercises.length}
+            </p>
+            {currentExercise.picture ? (
+              <img
+                src={currentExercise.picture}
+                alt={currentExercise.workoutName}
+                className="mx-auto mb-4 max-h-72 w-full rounded-lg object-contain"
+              />
+            ) : null}
             <h2 className="mb-3 text-3xl font-bold">{currentExercise.workoutName}</h2>
             <p className="text-xl">
               {currentExercise.reps} ({currentExercise.repMode})
