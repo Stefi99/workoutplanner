@@ -1,65 +1,433 @@
-import Image from "next/image";
+"use client";
+
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { Difficulty, ExerciseItem, RepMode, WorkoutPlannerState } from "@/lib/types";
+import { loadState, saveState, uid } from "@/lib/workout-storage";
+
+type ParsedExerciseDraft = {
+  workoutName: string;
+  reps: number;
+  repMode: RepMode;
+};
+
+const difficultyLabels: Record<Difficulty, string> = {
+  light: "Leicht",
+  medium: "Mittel",
+  hard: "Schwierig",
+};
 
 export default function Home() {
+  const [state, setState] = useState<WorkoutPlannerState>(loadState);
+  const [selectedWeekId, setSelectedWeekId] = useState<string | null>(() => loadState().weeks[0]?.id ?? null);
+  const [newWeekName, setNewWeekName] = useState("");
+  const [exerciseName, setExerciseName] = useState("");
+  const [exerciseReps, setExerciseReps] = useState(10);
+  const [exerciseRepMode, setExerciseRepMode] = useState<RepMode>("count");
+  const [exercisePicture, setExercisePicture] = useState("");
+  const [isWorkoutMode, setIsWorkoutMode] = useState(false);
+  const [currentExerciseIndex, setCurrentExerciseIndex] = useState(0);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [ratingDifficulty, setRatingDifficulty] = useState<Difficulty>("medium");
+  const [ratingNote, setRatingNote] = useState("");
+  const [importDocName, setImportDocName] = useState("");
+  const [importDrafts, setImportDrafts] = useState<ParsedExerciseDraft[]>([]);
+
+  useEffect(() => {
+    saveState(state);
+  }, [state]);
+
+  const selectedWeek = useMemo(
+    () => state.weeks.find((week) => week.id === selectedWeekId) ?? null,
+    [state.weeks, selectedWeekId],
+  );
+
+  const activeExercises = selectedWeek?.exercises ?? [];
+  const currentExercise = activeExercises[currentExerciseIndex] ?? null;
+
+  function createWeek(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmed = newWeekName.trim();
+    if (!trimmed) return;
+
+    const week = {
+      id: uid("week"),
+      name: trimmed,
+      order: state.weeks.length + 1,
+      exercises: [],
+      createdAt: new Date().toISOString(),
+    };
+    setState((prev) => ({ ...prev, weeks: [...prev.weeks, week] }));
+    setSelectedWeekId(week.id);
+    setNewWeekName("");
+  }
+
+  function addExercise(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedWeek || !exerciseName.trim()) return;
+
+    const exercise: ExerciseItem = {
+      id: uid("exercise"),
+      workoutName: exerciseName.trim(),
+      picture: exercisePicture.trim() || undefined,
+      reps: exerciseReps,
+      repMode: exerciseRepMode,
+      createdAt: new Date().toISOString(),
+    };
+
+    setState((prev) => ({
+      ...prev,
+      weeks: prev.weeks.map((week) =>
+        week.id === selectedWeek.id
+          ? { ...week, exercises: [...week.exercises, exercise] }
+          : week,
+      ),
+    }));
+
+    setExerciseName("");
+    setExercisePicture("");
+    setExerciseReps(10);
+    setExerciseRepMode("count");
+  }
+
+  function startWorkout() {
+    if (!selectedWeek || selectedWeek.exercises.length === 0) return;
+    const sessionId = uid("session");
+    setState((prev) => ({
+      ...prev,
+      sessions: [
+        ...prev.sessions,
+        {
+          id: sessionId,
+          weekId: selectedWeek.id,
+          weekName: selectedWeek.name,
+          startedAt: new Date().toISOString(),
+          endedAt: "",
+          completedExerciseIds: [],
+        },
+      ],
+    }));
+    setActiveSessionId(sessionId);
+    setCurrentExerciseIndex(0);
+    setIsWorkoutMode(true);
+  }
+
+  const finishWorkout = useCallback(() => {
+    if (!activeSessionId) return;
+    setState((prev) => ({
+      ...prev,
+      sessions: prev.sessions.map((session) =>
+        session.id === activeSessionId
+          ? { ...session, endedAt: new Date().toISOString() }
+          : session,
+      ),
+    }));
+    setIsWorkoutMode(false);
+  }, [activeSessionId]);
+
+  const nextExercise = useCallback(() => {
+    if (!selectedWeek) return;
+    const lastIndex = selectedWeek.exercises.length - 1;
+    const current = selectedWeek.exercises[currentExerciseIndex];
+    if (!current || !activeSessionId) return;
+
+    setState((prev) => ({
+      ...prev,
+      sessions: prev.sessions.map((session) =>
+        session.id === activeSessionId
+          ? {
+              ...session,
+              completedExerciseIds: [...session.completedExerciseIds, current.id],
+            }
+          : session,
+      ),
+    }));
+
+    if (currentExerciseIndex >= lastIndex) {
+      finishWorkout();
+      return;
+    }
+    setCurrentExerciseIndex((prev) => prev + 1);
+  }, [activeSessionId, currentExerciseIndex, finishWorkout, selectedWeek]);
+
+  function saveRating() {
+    if (!activeSessionId) return;
+    setState((prev) => ({
+      ...prev,
+      ratings: [
+        ...prev.ratings,
+        {
+          id: uid("rating"),
+          sessionId: activeSessionId,
+          difficulty: ratingDifficulty,
+          note: ratingNote.trim() || undefined,
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    }));
+    setActiveSessionId(null);
+    setRatingDifficulty("medium");
+    setRatingNote("");
+  }
+
+  async function handleDocUpload(event: ChangeEvent<HTMLInputElement>) {
+    if (!selectedWeek) return;
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const text = await file.text().catch(() => "");
+    const parsed = parseDocumentText(text);
+    setImportDocName(file.name);
+    setImportDrafts(parsed);
+  }
+
+  function importDraftsToWeek() {
+    if (!selectedWeek || importDrafts.length === 0) return;
+    const now = new Date().toISOString();
+    const imported: ExerciseItem[] = importDrafts.map((draft) => ({
+      id: uid("exercise"),
+      workoutName: draft.workoutName,
+      reps: draft.reps,
+      repMode: draft.repMode,
+      sourceDocName: importDocName,
+      createdAt: now,
+    }));
+
+    setState((prev) => ({
+      ...prev,
+      weeks: prev.weeks.map((week) =>
+        week.id === selectedWeek.id
+          ? { ...week, exercises: [...week.exercises, ...imported] }
+          : week,
+      ),
+    }));
+
+    setImportDrafts([]);
+    setImportDocName("");
+  }
+
+  useEffect(() => {
+    if (!isWorkoutMode) return;
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        nextExercise();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [isWorkoutMode, nextExercise]);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+    <div className="min-h-screen bg-slate-100 p-6 text-slate-900">
+      <div className="mx-auto grid max-w-6xl gap-4 md:grid-cols-[300px_1fr]">
+        <aside className="rounded-xl bg-white p-4 shadow">
+          <h1 className="text-xl font-bold">Workoutplaner</h1>
+          <p className="mb-4 text-sm text-slate-500">{state.user.email}</p>
+
+          <form onSubmit={createWeek} className="mb-4 space-y-2">
+            <input
+              value={newWeekName}
+              onChange={(event) => setNewWeekName(event.target.value)}
+              placeholder="Neue Woche (z.B. Week 1)"
+              className="w-full rounded border border-slate-300 px-3 py-2"
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            <button className="w-full rounded bg-slate-900 px-3 py-2 text-white">
+              Woche hinzufügen
+            </button>
+          </form>
+
+          <ul className="space-y-2">
+            {state.weeks.map((week) => (
+              <li key={week.id}>
+                <button
+                  className={`w-full rounded px-3 py-2 text-left ${
+                    selectedWeekId === week.id ? "bg-slate-900 text-white" : "bg-slate-100"
+                  }`}
+                  onClick={() => setSelectedWeekId(week.id)}
+                >
+                  {week.name} ({week.exercises.length})
+                </button>
+              </li>
+            ))}
+          </ul>
+        </aside>
+
+        <main className="rounded-xl bg-white p-4 shadow">
+          {!selectedWeek ? (
+            <p>Erstelle links zuerst eine Woche.</p>
+          ) : (
+            <>
+              <header className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-semibold">{selectedWeek.name}</h2>
+                <button
+                  className="rounded bg-emerald-600 px-3 py-2 text-white disabled:opacity-50"
+                  onClick={startWorkout}
+                  disabled={selectedWeek.exercises.length === 0}
+                >
+                  Workout starten
+                </button>
+              </header>
+
+              <form onSubmit={addExercise} className="mb-6 grid gap-2 md:grid-cols-4">
+                <input
+                  value={exerciseName}
+                  onChange={(event) => setExerciseName(event.target.value)}
+                  placeholder="Workoutname"
+                  className="rounded border border-slate-300 px-3 py-2"
+                />
+                <input
+                  type="number"
+                  min={1}
+                  value={exerciseReps}
+                  onChange={(event) => setExerciseReps(Number(event.target.value))}
+                  className="rounded border border-slate-300 px-3 py-2"
+                />
+                <select
+                  value={exerciseRepMode}
+                  onChange={(event) => setExerciseRepMode(event.target.value as RepMode)}
+                  className="rounded border border-slate-300 px-3 py-2"
+                >
+                  <option value="count">Wiederholungen</option>
+                  <option value="time_seconds">Sekunden</option>
+                  <option value="time_minutes">Minuten</option>
+                </select>
+                <button className="rounded bg-slate-900 px-3 py-2 text-white">Hinzufügen</button>
+                <input
+                  value={exercisePicture}
+                  onChange={(event) => setExercisePicture(event.target.value)}
+                  placeholder="Bild-URL (optional)"
+                  className="rounded border border-slate-300 px-3 py-2 md:col-span-4"
+                />
+              </form>
+
+              <section className="mb-6 rounded border border-slate-200 p-3">
+                <h3 className="mb-2 font-semibold">Dokumentimport</h3>
+                <input type="file" onChange={handleDocUpload} className="mb-3" />
+                {importDrafts.length > 0 ? (
+                  <div className="space-y-2">
+                    {importDrafts.map((draft, index) => (
+                      <div key={`${draft.workoutName}-${index}`} className="rounded bg-slate-50 p-2 text-sm">
+                        {draft.workoutName} - {draft.reps} ({draft.repMode})
+                      </div>
+                    ))}
+                    <button
+                      className="rounded bg-blue-600 px-3 py-2 text-white"
+                      onClick={importDraftsToWeek}
+                    >
+                      In {selectedWeek.name} importieren
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500">Datei hochladen, dann Vorschau prüfen.</p>
+                )}
+              </section>
+
+              <ul className="space-y-2">
+                {selectedWeek.exercises.map((exercise) => (
+                  <li key={exercise.id} className="rounded border border-slate-200 p-3">
+                    <div className="font-medium">{exercise.workoutName}</div>
+                    <div className="text-sm text-slate-500">
+                      {exercise.reps} - {exercise.repMode}
+                    </div>
+                    {exercise.picture ? (
+                      <a className="text-sm text-blue-600" href={exercise.picture} target="_blank">
+                        Bild ansehen
+                      </a>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </main>
+      </div>
+
+      {isWorkoutMode && currentExercise && (
+        <div
+          className="fixed inset-0 z-10 grid place-items-center bg-black/85 p-6 text-white"
+          onClick={nextExercise}
+        >
+          <div className="max-w-xl text-center">
+            <p className="mb-2 text-sm text-slate-200">Enter / Leertaste / Tap für nächste Übung</p>
+            <h2 className="mb-3 text-3xl font-bold">{currentExercise.workoutName}</h2>
+            <p className="text-xl">
+              {currentExercise.reps} ({currentExercise.repMode})
+            </p>
+          </div>
         </div>
-      </main>
+      )}
+
+      {!isWorkoutMode && activeSessionId && (
+        <div className="fixed inset-0 z-10 grid place-items-center bg-black/70 p-6">
+          <div className="w-full max-w-md rounded-xl bg-white p-4">
+            <h3 className="mb-2 text-lg font-semibold">Wie war das Workout?</h3>
+            <select
+              value={ratingDifficulty}
+              onChange={(event) => setRatingDifficulty(event.target.value as Difficulty)}
+              className="mb-2 w-full rounded border border-slate-300 px-3 py-2"
+            >
+              <option value="light">Leicht</option>
+              <option value="medium">Mittel</option>
+              <option value="hard">Schwierig</option>
+            </select>
+            <textarea
+              value={ratingNote}
+              onChange={(event) => setRatingNote(event.target.value)}
+              placeholder="Optionales Feedback"
+              className="mb-2 h-24 w-full rounded border border-slate-300 px-3 py-2"
+            />
+            <button className="w-full rounded bg-slate-900 px-3 py-2 text-white" onClick={saveRating}>
+              Bewertung speichern
+            </button>
+          </div>
+        </div>
+      )}
+
+      <section className="mx-auto mt-4 max-w-6xl rounded-xl bg-white p-4 shadow">
+        <h3 className="mb-2 font-semibold">Workout-Verlauf</h3>
+        {state.sessions.length === 0 ? (
+          <p className="text-sm text-slate-500">Noch keine abgeschlossenen Workouts.</p>
+        ) : (
+          <ul className="space-y-2">
+            {state.sessions
+              .filter((session) => session.endedAt)
+              .map((session) => {
+                const rating = state.ratings.find((entry) => entry.sessionId === session.id);
+                return (
+                  <li key={session.id} className="rounded border border-slate-200 p-2 text-sm">
+                    {session.weekName} - {new Date(session.endedAt).toLocaleString("de-CH")} -{" "}
+                    {rating ? difficultyLabels[rating.difficulty] : "Unbewertet"}
+                  </li>
+                );
+              })}
+          </ul>
+        )}
+      </section>
     </div>
   );
+}
+
+function parseDocumentText(raw: string): ParsedExerciseDraft[] {
+  const lines = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const drafts = lines
+    .map((line) => {
+      const parts = line.split(/[,;|-]/).map((segment) => segment.trim());
+      if (parts.length < 2) return null;
+
+      const workoutName = parts[0];
+      const amount = Number(parts[1].replace(/[^\d]/g, "")) || 10;
+      const modeRaw = parts[2]?.toLowerCase() ?? "";
+      let repMode: RepMode = "count";
+      if (modeRaw.includes("sec")) repMode = "time_seconds";
+      if (modeRaw.includes("min")) repMode = "time_minutes";
+
+      return { workoutName, reps: amount, repMode };
+    })
+    .filter((entry): entry is ParsedExerciseDraft => Boolean(entry));
+
+  return drafts.slice(0, 30);
 }
