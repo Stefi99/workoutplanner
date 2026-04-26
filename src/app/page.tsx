@@ -31,6 +31,13 @@ export default function Home() {
   const [ratingNote, setRatingNote] = useState("");
   const [importDocName, setImportDocName] = useState("");
   const [importDrafts, setImportDrafts] = useState<ParsedExerciseDraft[]>([]);
+  const [editingWeekId, setEditingWeekId] = useState<string | null>(null);
+  const [editingWeekName, setEditingWeekName] = useState("");
+  const [editingExerciseId, setEditingExerciseId] = useState<string | null>(null);
+  const [editingExerciseName, setEditingExerciseName] = useState("");
+  const [editingExerciseReps, setEditingExerciseReps] = useState(10);
+  const [editingExerciseRepMode, setEditingExerciseRepMode] = useState<RepMode>("count");
+  const [editingExercisePicture, setEditingExercisePicture] = useState("");
 
   useEffect(() => {
     saveState(state);
@@ -87,6 +94,98 @@ export default function Home() {
     setExercisePicture("");
     setExerciseReps(10);
     setExerciseRepMode("count");
+  }
+
+  function startWeekEdit(weekId: string, currentName: string) {
+    setEditingWeekId(weekId);
+    setEditingWeekName(currentName);
+  }
+
+  function saveWeekEdit(weekId: string) {
+    const trimmed = editingWeekName.trim();
+    if (!trimmed) return;
+    setState((prev) => ({
+      ...prev,
+      weeks: prev.weeks.map((week) => (week.id === weekId ? { ...week, name: trimmed } : week)),
+    }));
+    setEditingWeekId(null);
+    setEditingWeekName("");
+  }
+
+  function deleteWeek(weekId: string) {
+    setState((prev) => ({
+      ...prev,
+      weeks: prev.weeks.filter((week) => week.id !== weekId),
+      sessions: prev.sessions.filter((session) => session.weekId !== weekId),
+    }));
+    if (selectedWeekId === weekId) {
+      const nextWeek = state.weeks.find((week) => week.id !== weekId);
+      setSelectedWeekId(nextWeek?.id ?? null);
+    }
+    if (editingWeekId === weekId) {
+      setEditingWeekId(null);
+      setEditingWeekName("");
+    }
+  }
+
+  function startExerciseEdit(exercise: ExerciseItem) {
+    setEditingExerciseId(exercise.id);
+    setEditingExerciseName(exercise.workoutName);
+    setEditingExerciseReps(exercise.reps);
+    setEditingExerciseRepMode(exercise.repMode);
+    setEditingExercisePicture(exercise.picture ?? "");
+  }
+
+  function saveExerciseEdit(exerciseId: string) {
+    if (!selectedWeek) return;
+    const trimmed = editingExerciseName.trim();
+    if (!trimmed) return;
+
+    setState((prev) => ({
+      ...prev,
+      weeks: prev.weeks.map((week) =>
+        week.id === selectedWeek.id
+          ? {
+              ...week,
+              exercises: week.exercises.map((exercise) =>
+                exercise.id === exerciseId
+                  ? {
+                      ...exercise,
+                      workoutName: trimmed,
+                      reps: editingExerciseReps,
+                      repMode: editingExerciseRepMode,
+                      picture: editingExercisePicture.trim() || undefined,
+                    }
+                  : exercise,
+              ),
+            }
+          : week,
+      ),
+    }));
+    cancelExerciseEdit();
+  }
+
+  function cancelExerciseEdit() {
+    setEditingExerciseId(null);
+    setEditingExerciseName("");
+    setEditingExerciseReps(10);
+    setEditingExerciseRepMode("count");
+    setEditingExercisePicture("");
+  }
+
+  function deleteExercise(exerciseId: string) {
+    if (!selectedWeek) return;
+    setState((prev) => ({
+      ...prev,
+      weeks: prev.weeks.map((week) =>
+        week.id === selectedWeek.id
+          ? { ...week, exercises: week.exercises.filter((exercise) => exercise.id !== exerciseId) }
+          : week,
+      ),
+    }));
+    if (editingExerciseId === exerciseId) {
+      cancelExerciseEdit();
+    }
   }
 
   function startWorkout() {
@@ -238,15 +337,55 @@ export default function Home() {
 
           <ul className="space-y-2">
             {state.weeks.map((week) => (
-              <li key={week.id}>
-                <button
-                  className={`w-full rounded px-3 py-2 text-left ${
-                    selectedWeekId === week.id ? "bg-slate-900 text-white" : "bg-slate-100"
-                  }`}
-                  onClick={() => setSelectedWeekId(week.id)}
-                >
-                  {week.name} ({week.exercises.length})
-                </button>
+              <li key={week.id} className="rounded bg-slate-100 p-2">
+                {editingWeekId === week.id ? (
+                  <div className="space-y-2">
+                    <input
+                      value={editingWeekName}
+                      onChange={(event) => setEditingWeekName(event.target.value)}
+                      className="w-full rounded border border-slate-300 px-3 py-2"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        className="flex-1 rounded bg-emerald-600 px-3 py-2 text-white"
+                        onClick={() => saveWeekEdit(week.id)}
+                      >
+                        Speichern
+                      </button>
+                      <button
+                        className="flex-1 rounded bg-slate-500 px-3 py-2 text-white"
+                        onClick={() => setEditingWeekId(null)}
+                      >
+                        Abbrechen
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <button
+                      className={`w-full rounded px-3 py-2 text-left ${
+                        selectedWeekId === week.id ? "bg-slate-900 text-white" : "bg-white"
+                      }`}
+                      onClick={() => setSelectedWeekId(week.id)}
+                    >
+                      {week.name} ({week.exercises.length})
+                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        className="flex-1 rounded bg-blue-600 px-2 py-1 text-sm text-white"
+                        onClick={() => startWeekEdit(week.id, week.name)}
+                      >
+                        Bearbeiten
+                      </button>
+                      <button
+                        className="flex-1 rounded bg-red-600 px-2 py-1 text-sm text-white"
+                        onClick={() => deleteWeek(week.id)}
+                      >
+                        Löschen
+                      </button>
+                    </div>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -325,15 +464,79 @@ export default function Home() {
               <ul className="space-y-2">
                 {selectedWeek.exercises.map((exercise) => (
                   <li key={exercise.id} className="rounded border border-slate-200 p-3">
-                    <div className="font-medium">{exercise.workoutName}</div>
-                    <div className="text-sm text-slate-500">
-                      {exercise.reps} - {exercise.repMode}
-                    </div>
-                    {exercise.picture ? (
-                      <a className="text-sm text-blue-600" href={exercise.picture} target="_blank">
-                        Bild ansehen
-                      </a>
-                    ) : null}
+                    {editingExerciseId === exercise.id ? (
+                      <div className="space-y-2">
+                        <input
+                          value={editingExerciseName}
+                          onChange={(event) => setEditingExerciseName(event.target.value)}
+                          className="w-full rounded border border-slate-300 px-3 py-2"
+                        />
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <input
+                            type="number"
+                            min={1}
+                            value={editingExerciseReps}
+                            onChange={(event) => setEditingExerciseReps(Number(event.target.value))}
+                            className="rounded border border-slate-300 px-3 py-2"
+                          />
+                          <select
+                            value={editingExerciseRepMode}
+                            onChange={(event) => setEditingExerciseRepMode(event.target.value as RepMode)}
+                            className="rounded border border-slate-300 px-3 py-2"
+                          >
+                            <option value="count">Wiederholungen</option>
+                            <option value="time_seconds">Sekunden</option>
+                            <option value="time_minutes">Minuten</option>
+                          </select>
+                        </div>
+                        <input
+                          value={editingExercisePicture}
+                          onChange={(event) => setEditingExercisePicture(event.target.value)}
+                          placeholder="Bild-URL (optional)"
+                          className="w-full rounded border border-slate-300 px-3 py-2"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            className="rounded bg-emerald-600 px-3 py-2 text-white"
+                            onClick={() => saveExerciseEdit(exercise.id)}
+                          >
+                            Speichern
+                          </button>
+                          <button
+                            className="rounded bg-slate-500 px-3 py-2 text-white"
+                            onClick={cancelExerciseEdit}
+                          >
+                            Abbrechen
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="font-medium">{exercise.workoutName}</div>
+                        <div className="text-sm text-slate-500">
+                          {exercise.reps} - {exercise.repMode}
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-3">
+                          {exercise.picture ? (
+                            <a className="text-sm text-blue-600" href={exercise.picture} target="_blank">
+                              Bild ansehen
+                            </a>
+                          ) : null}
+                          <button
+                            className="rounded bg-blue-600 px-2 py-1 text-sm text-white"
+                            onClick={() => startExerciseEdit(exercise)}
+                          >
+                            Bearbeiten
+                          </button>
+                          <button
+                            className="rounded bg-red-600 px-2 py-1 text-sm text-white"
+                            onClick={() => deleteExercise(exercise.id)}
+                          >
+                            Löschen
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>
